@@ -85,6 +85,21 @@ input:focus,textarea:focus{outline:none;border-color:var(--g)}
 .tabs button.on{color:var(--gd);box-shadow:inset 0 -3px 0 var(--g)}
 .spinner{width:22px;height:22px;border:3px solid var(--line);border-top-color:var(--g);border-radius:50%;animation:sp 0.8s linear infinite;margin:20px auto}
 @keyframes sp{to{transform:rotate(360deg)}}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.stats div{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 6px;text-align:center}
+.stats b{display:block;font-size:15px}
+.stats small{color:var(--mut);font-size:11px}
+.walletbig .prog{background:rgba(255,255,255,.3);margin:14px 0 8px}
+.walletbig .prog i{background:#fff}
+.walletbig small{display:block}
+.nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:#fff;border-top:1px solid var(--line);display:flex;z-index:10;padding-bottom:env(safe-area-inset-bottom)}
+.nav button{flex:1;background:none;padding:8px 0 9px;color:var(--mut);font-size:11px;font-weight:700}
+.nav button span{display:block;font-size:20px}
+.nav button.on{color:var(--gd)}
+.refbox{background:var(--gl);border:2px dashed var(--g);border-radius:14px;padding:12px;word-break:break-all;font-weight:700;color:var(--gd);margin:10px 0}
+.field-label{display:block;font-size:13px;font-weight:700;margin:10px 0 4px}
+.sep{display:flex;align-items:center;gap:10px;color:var(--mut);font-size:12px;margin:12px 0}
+.sep:before,.sep:after{content:"";flex:1;height:1px;background:var(--line)}
 </style>
 </head>
 <body>
@@ -105,7 +120,7 @@ const TASKS = {
   english: { name: 'Online Tutor: English', icon: '📖', theme: '', desc: 'Learn English and get paid' }
 };
 const SPIN_COST = 20;
-const state = { user: null, balance: 0 };
+const state = { user: null, balance: 0, dash: null };
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -133,8 +148,22 @@ function normPhone(p) {
   return p;
 }
 
-/* ---------- layout ---------- */
-function shell({ title, back, theme = '', body, bal = true }) {
+/* ---------- helpers / layout ---------- */
+function getRef() { try { return localStorage.getItem('ref') || ''; } catch (e) { return ''; } }
+try { const r = new URLSearchParams(location.search).get('ref'); if (r) localStorage.setItem('ref', r.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12)); } catch (e) {}
+
+function navBar(active) {
+  const items = [['#/', '🏠', 'Tasks'], ['#/refer', '👥', 'Invite'], ['#/wallet', '💳', 'Wallet'], ['#/settings', '⚙️', 'Settings']];
+  if (state.dash && state.dash.is_admin) items.push(['#/admin', '🛡️', 'Admin']);
+  return `<div style="height:76px"></div><nav class="nav" id="nav" data-active="${active}">${items.map(([h, i, l]) =>
+    `<button class="${h === active ? 'on' : ''}" onclick="location.hash='${h}'"><span>${i}</span>${l}</button>`).join('')}</nav>`;
+}
+function paintNav() {
+  const n = $('#nav'); if (!n) return;
+  const a = n.dataset.active; const sp = n.previousElementSibling;
+  if (sp) sp.remove(); n.outerHTML = navBar(a);
+}
+function shell({ title, back, theme = '', body, bal = true, active = null }) {
   $('#app').className = theme === 'purple' ? 'purple-theme' : '';
   $('#app').innerHTML = `
     <div class="top ${theme}">
@@ -142,35 +171,68 @@ function shell({ title, back, theme = '', body, bal = true }) {
       <h1>${esc(title)}</h1>
       ${bal ? `<button class="chip" onclick="location.hash='#/wallet'" data-bal>${money(state.balance)}</button>` : ''}
     </div>
-    ${body}`;
+    ${body}${active ? navBar(active) : ''}`;
 }
 const loading = () => `<div class="spinner"></div>`;
+async function loadDash() {
+  try {
+    state.dash = await rpc('get_dashboard');
+    state.balance = Number(state.dash.balance);
+    document.querySelectorAll('[data-bal]').forEach(el => el.textContent = money(state.balance));
+    paintNav();
+  } catch (e) { toast(e.message); }
+  return state.dash;
+}
+function progressHtml(d) {
+  const min = Number(d.min_withdrawal), bal = Number(d.balance), pct = Math.min(100, Math.round(bal / min * 100));
+  return `<div class="prog"><i style="width:${pct}%"></i></div><small>${bal >= min ? 'You can withdraw now' : money(min - bal) + ' more to reach the ' + money(min) + ' withdrawal minimum'}</small>`;
+}
+function copyText(t) {
+  const done = () => toast('Copied!');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, () => toast('Press and hold to copy'));
+  else { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) { toast('Press and hold to copy'); } ta.remove(); }
+}
 
 /* ---------- auth ---------- */
 function authView(mode = 'login') {
   const signup = mode === 'signup';
+  const ref = getRef();
   $('#app').className = '';
   $('#app').innerHTML = `
     <div class="top"><h1>Earn Tasks</h1></div>
     <div class="wrap">
       <div class="center"><div class="big-emoji">💰</div>
         <div class="hello">${signup ? 'Create your account' : 'Welcome back'}</div>
-        <p class="sub">Complete simple tasks and earn real cash to your wallet.</p></div>
+        <p class="sub">${signup ? 'Sign up and get a welcome bonus in your wallet.' : 'Complete simple tasks and earn real cash to your wallet.'}</p></div>
       <div class="card">
         <div id="autherr"></div>
+        ${signup && ref ? `<p class="hint" style="margin:0 0 8px">Invited with code <b>${esc(ref)}</b></p>` : ''}
+        ${signup ? `<input id="un" placeholder="Username (letters, numbers, _)" autocomplete="username" autocapitalize="none" style="margin-bottom:10px">` : ''}
         <input id="em" type="email" placeholder="Email" autocomplete="email" style="margin-bottom:10px">
         <input id="pw" type="password" placeholder="Password (min 6 characters)" autocomplete="${signup ? 'new-password' : 'current-password'}" style="margin-bottom:12px">
         <button class="btn big" id="authgo">${signup ? 'Sign up' : 'Log in'}</button>
-        <div class="center" style="margin-top:8px"><button class="link" onclick="authView('${signup ? 'login' : 'signup'}')">${signup ? 'I already have an account' : 'Create a new account'}</button></div>
+        <div class="sep">or</div>
+        <button class="btn alt big" id="google">Continue with Google</button>
+        <div class="center" style="margin-top:8px"><button class="link" onclick="authView('${signup ? 'login' : 'signup'}')">${signup ? 'I already have an account' : 'Create a new account'}</button>
+          ${signup ? '' : `<br><button class="link" onclick="forgotPw()">Forgot password?</button>`}</div>
       </div>
     </div>`;
+  const show = (m, ok) => $('#autherr').innerHTML = `<div class="err" ${ok ? 'style="background:#dcfce7;color:#166534"' : ''}>${esc(m)}</div>`;
   const go = async () => {
     const email = $('#em').value.trim(), password = $('#pw').value;
-    const show = (m, ok) => $('#autherr').innerHTML = `<div class="err" ${ok ? 'style="background:#dcfce7;color:#166534"' : ''}>${esc(m)}</div>`;
+    const username = signup ? $('#un').value.trim().toLowerCase() : '';
+    if (signup && !/^[a-z0-9_]{3,20}$/.test(username)) return show('Username must be 3-20 characters: letters, numbers or _ only.');
     if (!email || password.length < 6) return show('Enter your email and a password of at least 6 characters.');
     $('#authgo').disabled = true; $('#authgo').textContent = 'Please wait…';
     try {
-      const { data, error } = signup ? await sb.auth.signUp({ email, password }) : await sb.auth.signInWithPassword({ email, password });
+      if (signup) {
+        const { data: free, error: ue } = await sb.rpc('username_available', { p: username });
+        if (ue) throw ue;
+        if (!free) { show('That username is taken. Pick another one.'); throw 'handled'; }
+      }
+      const { data, error } = signup
+        ? await sb.auth.signUp({ email, password, options: { data: { username, ref } } })
+        : await sb.auth.signInWithPassword({ email, password });
       if (error) {
         let m = error.message;
         if (/invalid login/i.test(m)) m = 'Wrong email or password. If you have no account yet, tap "Create a new account".';
@@ -181,26 +243,46 @@ function authView(mode = 'login') {
       } else if (signup && !data.session) {
         show('Account created. Check your email to confirm it, then log in.', true);
       }
-    } catch (e) { show('Network error. Check your connection and try again.'); }
+    } catch (e) { if (e !== 'handled') show('Network error. Check your connection and try again.'); }
     $('#authgo').disabled = false; $('#authgo').textContent = signup ? 'Sign up' : 'Log in';
   };
   $('#authgo').onclick = go;
   $('#pw').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+  $('#google').onclick = async () => {
+    const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } });
+    if (error) show(/not enabled|unsupported/i.test(error.message) ? 'Google sign-in is not set up yet.' : error.message);
+  };
 }
 
 /* ---------- home ---------- */
-function homeView() {
-  shell({ title: 'Tasks', body: `
+async function homeView() {
+  shell({ title: 'Earn Tasks', active: '#/', body: `
     <div class="wrap">
-      <div class="hello">Pick a task</div>
+      <div id="dash">${loading()}</div>
+      <div class="hello" style="margin-top:6px">Pick a task</div>
       <p class="sub">Pass with 7 out of 10 to earn the reward.</p>
       <button class="card task" onclick="location.hash='#/task/surveys'"><div class="ico">📋</div><div><b>Surveys</b><small>${TASKS.surveys.desc}</small><br><span class="pill">Start free · earn up to Ksh 200</span></div></button>
       <div class="t-purple"><button class="card task" onclick="location.hash='#/task/brain'"><div class="ico">🧠</div><div><b>Brain Test</b><small>${TASKS.brain.desc}</small><br><span class="pill">Start free · earn up to Ksh 200</span></div></button></div>
       <div class="t-gold"><button class="card task" onclick="location.hash='#/spin'"><div class="ico">🎡</div><div><b>Spin the Wheel</b><small>${money(SPIN_COST)} per spin</small><br><span class="pill">Win up to Ksh 500</span></div></button></div>
       <button class="card task" onclick="location.hash='#/task/english'"><div class="ico">📖</div><div><b>Online Tutor: English</b><small>${TASKS.english.desc}</small><br><span class="pill">Start free · earn up to Ksh 200</span></div></button>
-      <button class="btn alt big" onclick="location.hash='#/wallet'">Open wallet</button>
+      <div id="payouts"></div>
     </div>` });
-  refreshBalance();
+  const d = await loadDash();
+  if (d && $('#dash')) {
+    $('#dash').innerHTML = `
+      <div class="hello">Hi, ${esc(d.username)} 👋</div>
+      <div class="walletbig" style="margin-top:10px"><small>Wallet balance</small><b data-bal>${money(d.balance)}</b>${progressHtml(d)}</div>
+      <div class="stats">
+        <div><b>${money(d.total_earned)}</b><small>Total earned</small></div>
+        <div><b>${d.referrals}</b><small>Referrals</small></div>
+        <div><b>${money(d.total_withdrawn)}</b><small>Withdrawn</small></div>
+      </div>`;
+  } else if ($('#dash')) $('#dash').innerHTML = '';
+  try {
+    const w = await rpc('get_recent_withdrawals');
+    if (w.length && $('#payouts')) $('#payouts').innerHTML = `<div class="card"><b>Recent payouts</b>${w.map(x =>
+      `<div class="row"><span>${esc(x.name)}</span><span class="amt plus">${money(x.amount)}</span></div>`).join('')}</div>`;
+  } catch (e) {}
 }
 
 /* ---------- levels ---------- */
@@ -411,60 +493,241 @@ async function animateSpin(r) {
 }
 
 /* ---------- wallet ---------- */
+function paintWTop(d) {
+  if (!$('#wtop')) return;
+  $('#wtop').innerHTML = `<div class="walletbig"><small>Wallet balance</small><b data-bal>${money(d.balance)}</b>${progressHtml(d)}</div>`;
+}
 async function walletView() {
-  shell({ title: 'Wallet', back: '#/', bal: false, body: `
+  shell({ title: 'Wallet', bal: false, active: '#/wallet', body: `
     <div class="wrap">
-      <div class="walletbig"><small>Wallet balance</small><b data-bal>${money(state.balance)}</b></div>
+      <div id="wtop">${loading()}</div>
+      <div class="card"><b>Withdraw</b>
+        <div id="werr"></div>
+        <input id="wa" inputmode="numeric" placeholder="Amount" style="margin:10px 0">
+        <input id="wp" inputmode="tel" placeholder="M-Pesa number e.g. 0712345678" style="margin-bottom:10px">
+        <button class="btn big" id="wgo">Request withdrawal</button>
+        <p class="hint" id="wnote"></p></div>
       <div class="card"><b>Add money with M-Pesa</b>
         <div id="derr"></div>
         <input id="da" inputmode="numeric" placeholder="Amount (min Ksh 10)" style="margin:10px 0">
         <input id="dp" inputmode="tel" placeholder="M-Pesa number e.g. 0712345678" style="margin-bottom:10px">
         <button class="btn big" id="dgo">Send M-Pesa request</button></div>
+      <div class="card"><b>Your withdrawals</b><div id="wl">${loading()}</div></div>
       <div class="card"><b>Recent activity</b><div id="tx">${loading()}</div></div>
-      <button class="btn alt big" id="out">Log out</button>
     </div>` });
-  refreshBalance();
-  $('#out').onclick = () => sb.auth.signOut();
+  const d = await loadDash();
+  if (d) {
+    paintWTop(d);
+    $('#wa').placeholder = `Amount (min ${money(d.min_withdrawal)})`;
+    $('#wp').value = d.phone ? '0' + String(d.phone).slice(3) : '';
+    $('#wnote').textContent = Number(d.pending_withdrawal) > 0
+      ? `You have ${money(d.pending_withdrawal)} waiting for approval.`
+      : `Minimum withdrawal is ${money(d.min_withdrawal)}. Requests are paid after approval.`;
+  }
+  $('#wgo').onclick = async () => {
+    const amount = Math.floor(Number($('#wa').value)), phone = normPhone($('#wp').value);
+    const show = (m, ok) => $('#werr').innerHTML = `<div class="err" ${ok ? 'style="background:#dcfce7;color:#166534"' : ''}>${esc(m)}</div>`;
+    if (!(amount > 0)) return show('Enter the amount to withdraw.');
+    if (!/^254(7|1)\d{8}$/.test(phone)) return show('Enter a valid M-Pesa number.');
+    $('#wgo').disabled = true;
+    try {
+      await rpc('request_withdrawal', { p_amount: amount, p_phone: phone });
+      const nd = await loadDash(); if (nd) paintWTop(nd);
+      show('Withdrawal requested. You will be paid after approval.', true);
+      $('#wa').value = ''; loadTx(); loadWl();
+    } catch (e) { show(e.message); }
+    $('#wgo').disabled = false;
+  };
   $('#dgo').onclick = async () => {
     const amount = Math.floor(Number($('#da').value)), phone = normPhone($('#dp').value);
     const show = (m, ok) => $('#derr').innerHTML = `<div class="err" ${ok ? 'style="background:#dcfce7;color:#166534"' : ''}>${esc(m)}</div>`;
     if (!(amount >= 10)) return show('Minimum deposit is Ksh 10.');
     if (!/^254(7|1)\d{8}$/.test(phone)) return show('Enter a valid Safaricom number.');
     $('#dgo').disabled = true; show('Check your phone and enter your M-Pesa PIN…', true);
-    try { await stkAndWait(amount, phone); show('Deposit received!', true); loadTx(); }
+    try { await stkAndWait(amount, phone); show('Deposit received!', true); const nd = await loadDash(); if (nd) paintWTop(nd); loadTx(); }
     catch (e) { show(e.message); }
     $('#dgo').disabled = false;
   };
-  loadTx();
+  loadTx(); loadWl();
+}
+async function loadWl() {
+  const { data } = await sb.from('payments').select('amount,status,created_at').eq('kind', 'withdraw').order('created_at', { ascending: false }).limit(10);
+  const el = $('#wl'); if (!el) return;
+  const st = { pending: '⏳ Pending', paid: '✅ Paid', rejected: '❌ Rejected (refunded)' };
+  el.innerHTML = (data && data.length) ? data.map(w =>
+    `<div class="row"><span>${money(w.amount)}<br><small style="color:var(--mut)">${new Date(w.created_at).toLocaleString('en-KE')}</small></span><span>${st[w.status] || esc(w.status)}</span></div>`).join('') : `<p class="hint">No withdrawals yet.</p>`;
 }
 async function loadTx() {
-  const { data } = await sb.from('task_transactions').select('kind,task_type,level_number,amount,created_at').order('created_at', { ascending: false }).limit(15);
+  const [a, b] = await Promise.all([
+    sb.from('task_transactions').select('kind,task_type,level_number,amount,created_at').order('created_at', { ascending: false }).limit(15),
+    sb.from('ledger').select('kind,amount,created_at').order('created_at', { ascending: false }).limit(15)]);
   const el = $('#tx'); if (!el) return;
-  const label = (t) => ({ unlock: `Unlocked ${TASKS[t.task_type]?.name || ''} L${t.level_number}`, reward: `${TASKS[t.task_type]?.name || ''} L${t.level_number} reward`, spin_bet: 'Spin', spin_win: 'Spin prize' }[t.kind] || t.kind);
-  el.innerHTML = (data && data.length) ? data.map(t => {
-    const plus = t.kind === 'reward' || t.kind === 'spin_win';
-    return `<div class="row"><span>${esc(label(t))}<br><small style="color:var(--mut)">${new Date(t.created_at).toLocaleString('en-KE')}</small></span><span class="amt ${plus ? 'plus' : 'minus'}">${plus ? '+' : '-'}${money(t.amount)}</span></div>`;
-  }).join('') : `<p class="hint">No activity yet.</p>`;
+  const rows = [];
+  (a.data || []).forEach(t => rows.push({
+    at: t.created_at, amt: (t.kind === 'reward' || t.kind === 'spin_win') ? Number(t.amount) : -Number(t.amount),
+    label: ({ unlock: `Unlocked ${TASKS[t.task_type]?.name || ''} L${t.level_number}`, reward: `${TASKS[t.task_type]?.name || ''} L${t.level_number} reward`, spin_bet: 'Spin', spin_win: 'Spin prize' })[t.kind] || t.kind }));
+  (b.data || []).forEach(l => rows.push({
+    at: l.created_at, amt: Number(l.amount),
+    label: ({ deposit: 'M-Pesa deposit', withdraw: 'Withdrawal request', bonus: 'Welcome bonus', referral: 'Referral reward', refund: 'Withdrawal refunded' })[l.kind] || l.kind }));
+  rows.sort((x, y) => new Date(y.at) - new Date(x.at));
+  el.innerHTML = rows.length ? rows.slice(0, 20).map(t =>
+    `<div class="row"><span>${esc(t.label)}<br><small style="color:var(--mut)">${new Date(t.at).toLocaleString('en-KE')}</small></span><span class="amt ${t.amt >= 0 ? 'plus' : 'minus'}">${t.amt >= 0 ? '+' : '-'}${money(Math.abs(t.amt))}</span></div>`).join('') : `<p class="hint">No activity yet.</p>`;
+}
+
+/* ---------- invite ---------- */
+async function referView() {
+  shell({ title: 'Invite & Earn', bal: false, active: '#/refer', body: `<div class="wrap" id="rf">${loading()}</div>` });
+  const d = await loadDash(); if (!d || !$('#rf')) return;
+  const link = location.origin + location.pathname + '?ref=' + d.referral_code;
+  const msg = `Join me on Earn Tasks and start earning: ${link}`;
+  $('#rf').innerHTML = `
+    <div class="walletbig"><small>Earn ${money(d.referral_reward)} per friend</small><b>${d.referrals} invited</b><small style="margin-top:6px">${d.referrals_paid} paid you a reward</small></div>
+    <div class="card"><b>Your invite link</b>
+      <div class="refbox">${esc(link)}</div>
+      <button class="btn big" id="cp">Copy link</button>
+      <a class="btn big alt" style="display:block;text-align:center;text-decoration:none;margin-top:10px" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(msg)}">Share on WhatsApp</a></div>
+    <div class="card"><b>How it works</b>
+      <p class="sub" style="margin:8px 0 0">1. Share your link with friends.<br>2. They sign up using it.<br>3. When a friend makes their first deposit of ${money(d.referral_min_deposit)} or more, you get ${money(d.referral_reward)} in your wallet.</p></div>`;
+  $('#cp').onclick = () => copyText(link);
+}
+
+/* ---------- settings ---------- */
+async function settingsView() {
+  shell({ title: 'Settings', bal: false, active: '#/settings', body: `<div class="wrap" id="st">${loading()}</div>` });
+  const d = await loadDash(); if (!d || !$('#st')) return;
+  $('#st').innerHTML = `
+    <div class="card"><b>Profile</b>
+      <label class="field-label">Username</label><input value="${esc(d.username)}" disabled>
+      <label class="field-label">Email</label><input value="${esc(state.user.email || '')}" disabled>
+      <label class="field-label">M-Pesa number (for withdrawals)</label>
+      <div id="perr2"></div>
+      <input id="sp2" inputmode="tel" placeholder="0712345678" value="${d.phone ? '0' + esc(String(d.phone).slice(3)) : ''}">
+      <button class="btn big" id="sv" style="margin-top:10px">Save number</button></div>
+    <div class="card"><b>Change password</b>
+      <div id="pwerr"></div>
+      <input id="np2" type="password" placeholder="New password (min 6 characters)" autocomplete="new-password" style="margin:10px 0">
+      <button class="btn big" id="svp">Change password</button></div>
+    <button class="btn alt big" id="out">Log out</button>`;
+  $('#sv').onclick = async () => {
+    const show = (m, ok) => $('#perr2').innerHTML = `<div class="err" ${ok ? 'style="background:#dcfce7;color:#166534"' : ''}>${esc(m)}</div>`;
+    const raw = $('#sp2').value.trim(), phone = raw ? normPhone(raw) : '';
+    try { await rpc('update_profile', { p_phone: phone }); show('Saved.', true); } catch (e) { show(e.message); }
+  };
+  $('#svp').onclick = async () => {
+    const show = (m, ok) => $('#pwerr').innerHTML = `<div class="err" ${ok ? 'style="background:#dcfce7;color:#166534"' : ''}>${esc(m)}</div>`;
+    const pw = $('#np2').value;
+    if (pw.length < 6) return show('Use at least 6 characters.');
+    const { error } = await sb.auth.updateUser({ password: pw });
+    if (error) return show(error.message);
+    $('#np2').value = ''; show('Password changed.', true);
+  };
+  $('#out').onclick = () => sb.auth.signOut();
+}
+
+/* ---------- admin ---------- */
+let adminTab = 'withdrawals';
+async function adminView() {
+  shell({ title: 'Admin', bal: false, active: '#/admin', body: `<div class="tabs" id="atabs"></div><div class="wrap" id="abody">${loading()}</div>` });
+  const d = await loadDash();
+  if (!d || !d.is_admin) { if ($('#abody')) $('#abody').innerHTML = '<div class="err">Admins only.</div>'; return; }
+  renderAdmin();
+}
+async function renderAdmin() {
+  const tabs = $('#atabs'), el = $('#abody'); if (!tabs || !el) return;
+  tabs.innerHTML = [['withdrawals', 'Withdrawals'], ['users', 'Users'], ['overview', 'Overview'], ['settings', 'Settings']]
+    .map(([k, l]) => `<button class="${adminTab === k ? 'on' : ''}" onclick="adminTab='${k}';renderAdmin()">${l}</button>`).join('');
+  el.innerHTML = loading();
+  try {
+    if (adminTab === 'withdrawals') {
+      const rows = await rpc('admin_list_withdrawals', { p_status: 'pending' });
+      el.innerHTML = rows.length ? rows.map(w => `<div class="card">
+          <div class="row" style="border:0;padding-top:0"><b>${esc(w.username || 'user')}</b><b>${money(w.amount)}</b></div>
+          <small style="color:var(--mut)">${esc(w.phone)} · ${new Date(w.created_at).toLocaleString('en-KE')}</small>
+          <div style="display:flex;gap:8px;margin-top:10px"><button class="btn" style="flex:1" onclick="resolveWd(${w.id},true)">Mark paid</button><button class="btn alt" style="flex:1" onclick="resolveWd(${w.id},false)">Reject</button></div></div>`).join('')
+        + `<p class="hint">Send the money by M-Pesa first, then tap Mark paid. Reject returns the money to the user's wallet.</p>`
+        : '<p class="sub">No pending withdrawals.</p>';
+    } else if (adminTab === 'users') {
+      const rows = await rpc('admin_list_users');
+      el.innerHTML = `<p class="sub">${rows.length} users</p>` + rows.map(u => `<div class="card">
+          <div class="row" style="border:0;padding-top:0"><b>${esc(u.username || '-')}</b><b>${money(u.balance)}</b></div>
+          <small style="color:var(--mut)">${esc(u.email || '')}<br>${u.phone ? esc(u.phone) + ' · ' : ''}${u.referrals} referrals · joined ${new Date(u.created_at).toLocaleDateString('en-KE')}</small></div>`).join('');
+    } else if (adminTab === 'overview') {
+      const o = await rpc('admin_overview');
+      el.innerHTML = `<div class="stats" style="grid-template-columns:1fr 1fr">
+          <div><b>${o.users}</b><small>Users</small></div>
+          <div><b>${o.pending_count}</b><small>Pending withdrawals</small></div>
+          <div><b>${money(o.pending_amount)}</b><small>Pending amount</small></div>
+          <div><b>${money(o.paid_out)}</b><small>Paid out</small></div>
+          <div><b>${money(o.deposits)}</b><small>Deposits received</small></div>
+          <div><b>${money(o.wallet_total)}</b><small>Total in user wallets</small></div></div>`;
+    } else {
+      const o = await rpc('admin_overview'), s = o.settings || {};
+      const labels = { welcome_bonus: 'Welcome bonus (Ksh)', min_withdrawal: 'Minimum withdrawal (Ksh)', referral_reward: 'Referral reward (Ksh)', referral_min_deposit: 'Deposit needed for referral reward (Ksh)' };
+      el.innerHTML = Object.keys(labels).map(k => `<div class="card"><label class="field-label" style="margin-top:0">${labels[k]}</label>
+          <input id="set_${k}" inputmode="numeric" value="${esc(s[k])}"><button class="btn big" style="margin-top:10px" onclick="saveSetting('${k}')">Save</button></div>`).join('')
+        + `<p class="hint">Changes apply to new signups and new requests.</p>`;
+    }
+  } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+async function resolveWd(id, paid) {
+  let receipt = null;
+  if (paid) { receipt = prompt('M-Pesa receipt code (optional):'); if (receipt === null) return; }
+  else if (!confirm('Reject this withdrawal and refund the user?')) return;
+  try { await rpc('admin_resolve_withdrawal', { p_id: id, p_paid: paid, p_receipt: receipt || null }); toast(paid ? 'Marked as paid' : 'Rejected and refunded'); renderAdmin(); }
+  catch (e) { toast(e.message); }
+}
+async function saveSetting(k) {
+  const v = Number($('#set_' + k).value);
+  try { await rpc('admin_set_setting', { p_key: k, p_value: v }); toast('Saved'); } catch (e) { toast(e.message); }
 }
 
 /* ---------- router ---------- */
 function route() {
   closeModal();
+  if (recovering) return recoveryView();
   if (!state.user) return authView();
   const p = (location.hash || '#/').slice(2).split('/');
   if (p[0] === 'task') return levelsView(p[1]);
   if (p[0] === 'quiz') return quizView(p[1], Number(p[2]));
   if (p[0] === 'spin') return spinView();
   if (p[0] === 'wallet') return walletView();
+  if (p[0] === 'refer') return referView();
+  if (p[0] === 'settings') return settingsView();
+  if (p[0] === 'admin') return adminView();
   homeView();
 }
 window.addEventListener('hashchange', route);
+async function forgotPw() {
+  const email = ($('#em') && $('#em').value || '').trim();
+  const show = (m, ok) => $('#autherr').innerHTML = `<div class="err" ${ok ? 'style="background:#dcfce7;color:#166534"' : ''}>${esc(m)}</div>`;
+  if (!email) return show('Type your email above first, then tap Forgot password.');
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+  if (error) return show(/rate limit/i.test(error.message) ? 'Too many emails sent. Wait an hour and try again.' : error.message);
+  show('If this email has an account, a reset link has been sent. Check your inbox and spam.', true);
+}
+function recoveryView() {
+  $('#app').className = '';
+  $('#app').innerHTML = `<div class="top"><h1>Set new password</h1></div>
+    <div class="wrap"><div class="card"><div id="rerr"></div>
+      <input id="np" type="password" placeholder="New password (min 6 characters)" autocomplete="new-password" style="margin-bottom:12px">
+      <button class="btn big" id="rgo">Save new password</button></div></div>`;
+  $('#rgo').onclick = async () => {
+    const pw = $('#np').value;
+    if (pw.length < 6) return $('#rerr').innerHTML = '<div class="err">Use at least 6 characters.</div>';
+    const { error } = await sb.auth.updateUser({ password: pw });
+    if (error) return $('#rerr').innerHTML = `<div class="err">${esc(error.message)}</div>`;
+    recovering = false; location.hash = '#/'; route();
+  };
+}
+let recovering = false;
 sb.auth.onAuthStateChange((_e, session) => {
+  if (_e === 'PASSWORD_RECOVERY') { recovering = true; state.user = session ? session.user : null; return recoveryView(); }
+  if (recovering) return;
   const was = state.user && state.user.id;
   state.user = session ? session.user : null;
-  if ((state.user && state.user.id) !== was) { if (!state.user) location.hash = '#/'; route(); }
+  if ((state.user && state.user.id) !== was) { state.dash = null; if (!state.user) location.hash = '#/'; route(); }
 });
-sb.auth.getSession().then(({ data }) => { state.user = data.session ? data.session.user : null; route(); });
+sb.auth.getSession().then(({ data }) => { state.user = data.session ? data.session.user : null; if (!recovering) route(); });
 </script>
 </body>
 </html>
