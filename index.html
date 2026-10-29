@@ -100,6 +100,13 @@ input:focus,textarea:focus{outline:none;border-color:var(--g)}
 .field-label{display:block;font-size:13px;font-weight:700;margin:10px 0 4px}
 .sep{display:flex;align-items:center;gap:10px;color:var(--mut);font-size:12px;margin:12px 0}
 .sep:before,.sep:after{content:"";flex:1;height:1px;background:var(--line)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:12px 16px 0;background:var(--bg)}
+.chips button{flex:0 0 auto;border-radius:999px;padding:8px 14px;background:#fff;border:2px solid var(--line);color:var(--mut);font-weight:700;font-size:13px}
+.chips button.on{background:var(--g);border-color:var(--g);color:#fff}
+.tabs{overflow-x:auto}
+.tabs button{flex:0 0 auto;padding:12px 14px;white-space:nowrap}
+select{width:100%;font:inherit;border:2px solid var(--line);border-radius:12px;padding:12px;background:#fff}
+.sheet{max-height:92vh;overflow-y:auto}
 </style>
 </head>
 <body>
@@ -265,6 +272,7 @@ async function homeView() {
       <div class="t-purple"><button class="card task" onclick="location.hash='#/task/brain'"><div class="ico">🧠</div><div><b>Brain Test</b><small>${TASKS.brain.desc}</small><br><span class="pill">Start free · earn up to Ksh 200</span></div></button></div>
       <div class="t-gold"><button class="card task" onclick="location.hash='#/spin'"><div class="ico">🎡</div><div><b>Spin the Wheel</b><small>${money(SPIN_COST)} per spin</small><br><span class="pill">Win up to Ksh 500</span></div></button></div>
       <button class="card task" onclick="location.hash='#/task/english'"><div class="ico">📖</div><div><b>Online Tutor: English</b><small>${TASKS.english.desc}</small><br><span class="pill">Start free · earn up to Ksh 200</span></div></button>
+      <button class="card task" onclick="location.hash='#/market'"><div class="ico">🧰</div><div><b>More Tasks</b><small>App testing, website feedback, micro tasks, freelancing, transcription</small><br><span class="pill">New tasks added by admin</span></div></button>
       <div id="payouts"></div>
     </div>` });
   const d = await loadDash();
@@ -568,7 +576,7 @@ async function loadTx() {
     label: ({ unlock: `Unlocked ${TASKS[t.task_type]?.name || ''} L${t.level_number}`, reward: `${TASKS[t.task_type]?.name || ''} L${t.level_number} reward`, spin_bet: 'Spin', spin_win: 'Spin prize' })[t.kind] || t.kind }));
   (b.data || []).forEach(l => rows.push({
     at: l.created_at, amt: Number(l.amount),
-    label: ({ deposit: 'M-Pesa deposit', withdraw: 'Withdrawal request', bonus: 'Welcome bonus', referral: 'Referral reward', refund: 'Withdrawal refunded' })[l.kind] || l.kind }));
+    label: ({ deposit: 'M-Pesa deposit', withdraw: 'Withdrawal request', bonus: 'Welcome bonus', referral: 'Referral reward', refund: 'Withdrawal refunded', task: 'Task reward' })[l.kind] || l.kind }));
   rows.sort((x, y) => new Date(y.at) - new Date(x.at));
   el.innerHTML = rows.length ? rows.slice(0, 20).map(t =>
     `<div class="row"><span>${esc(t.label)}<br><small style="color:var(--mut)">${new Date(t.at).toLocaleString('en-KE')}</small></span><span class="amt ${t.amt >= 0 ? 'plus' : 'minus'}">${t.amt >= 0 ? '+' : '-'}${money(Math.abs(t.amt))}</span></div>`).join('') : `<p class="hint">No activity yet.</p>`;
@@ -624,6 +632,62 @@ async function settingsView() {
   $('#out').onclick = () => sb.auth.signOut();
 }
 
+/* ---------- more tasks (marketplace) ---------- */
+const CATS = {
+  app_testing: ['📱', 'App testing'], website_feedback: ['🌐', 'Website feedback'], micro: ['🧩', 'Micro tasks'],
+  freelancing: ['💼', 'Freelancing'], transcription: ['🎧', 'Transcription']
+};
+let mktCat = null, mktList = [];
+async function marketView() {
+  shell({ title: 'More Tasks', back: '#/', body: `<div class="chips" id="mchips"></div><div class="wrap" id="mlist">${loading()}</div>` });
+  refreshBalance();
+  loadMarket();
+}
+async function loadMarket() {
+  const chips = $('#mchips'), list = $('#mlist'); if (!chips || !list) return;
+  chips.innerHTML = [[null, 'All'], ...Object.entries(CATS).map(([k, v]) => [k, v[1]])]
+    .map(([k, l]) => `<button class="${mktCat === k ? 'on' : ''}" onclick="mktCat=${k === null ? 'null' : `'${k}'`};loadMarket()">${l}</button>`).join('');
+  list.innerHTML = loading();
+  try {
+    mktList = await rpc('list_market_tasks', { p_category: mktCat });
+    const st = { pending: '⏳ Waiting for review', approved: '✅ Paid', rejected: '❌ Rejected' };
+    list.innerHTML = mktList.length ? mktList.map(t => {
+      const c = CATS[t.category] || ['📌', t.category], full = t.slots && t.taken >= t.slots && !t.my_status;
+      return `<button class="card task" onclick="openTask(${t.id})"><div class="ico" style="background:var(--gl)">${c[0]}</div>
+        <div><b>${esc(t.title)}</b><small>${c[1]}${t.slots ? ' · ' + Math.max(0, t.slots - t.taken) + ' slots left' : ''}</small><br>
+        <span class="pill">${money(t.reward)}</span> ${t.my_status ? `<small>${st[t.my_status] || ''}</small>` : (full ? '<small>Full</small>' : '')}</div></button>`;
+    }).join('') : `<p class="sub center">No tasks here yet. Check back soon.</p>`;
+  } catch (e) { list.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+function openTask(id) {
+  const t = mktList.find(x => x.id === id); if (!t) return;
+  const c = CATS[t.category] || ['📌', t.category];
+  const st = { pending: 'Your submission is waiting for review.', approved: 'Approved. The reward was added to your wallet.', rejected: 'Your submission was rejected.' };
+  const full = t.slots && t.taken >= t.slots && !t.my_status;
+  $('#modal').innerHTML = `<div class="overlay" id="ov"><div class="sheet">
+    <h3>${c[0]} ${esc(t.title)}</h3>
+    <p style="margin-bottom:8px">${c[1]} · Reward <b>${money(t.reward)}</b></p>
+    <div style="white-space:pre-wrap;margin-bottom:12px">${esc(t.description)}</div>
+    ${t.link_url ? `<a class="btn big alt" style="display:block;text-align:center;text-decoration:none;margin-bottom:10px" href="${esc(t.link_url)}" target="_blank" rel="noopener noreferrer">Open task link</a>` : ''}
+    ${t.audio_url ? `<audio controls preload="none" src="${esc(t.audio_url)}" style="width:100%;margin-bottom:12px"></audio>` : ''}
+    <div id="terr2"></div>
+    ${t.my_status ? `<div class="err" style="background:#dcfce7;color:#166534">${st[t.my_status]}${t.my_note ? '<br>Note: ' + esc(t.my_note) : ''}</div>`
+      : full ? `<div class="err">This task is full.</div>`
+      : `<textarea id="proof" placeholder="Write your answer / proof here (links are fine)…"></textarea>
+         <button class="btn big" id="tsub" style="margin-top:10px">Submit for review</button>
+         <p class="hint">An admin checks your work and the reward is added after approval.</p>`}
+    <button class="link" style="width:100%" onclick="closeModal()">Close</button></div></div>`;
+  $('#ov').onclick = (e) => { if (e.target.id === 'ov') closeModal(); };
+  const b = $('#tsub');
+  if (b) b.onclick = async () => {
+    const proof = $('#proof').value.trim();
+    if (proof.length < 5) return $('#terr2').innerHTML = '<div class="err">Please write your answer or proof.</div>';
+    b.disabled = true;
+    try { await rpc('submit_market_task', { p_task: id, p_proof: proof }); closeModal(); toast('Submitted! Waiting for review.'); loadMarket(); }
+    catch (e) { $('#terr2').innerHTML = `<div class="err">${esc(e.message)}</div>`; b.disabled = false; }
+  };
+}
+
 /* ---------- admin ---------- */
 let adminTab = 'withdrawals';
 async function adminView() {
@@ -634,7 +698,7 @@ async function adminView() {
 }
 async function renderAdmin() {
   const tabs = $('#atabs'), el = $('#abody'); if (!tabs || !el) return;
-  tabs.innerHTML = [['withdrawals', 'Withdrawals'], ['users', 'Users'], ['overview', 'Overview'], ['settings', 'Settings']]
+  tabs.innerHTML = [['withdrawals', 'Withdrawals'], ['reviews', 'Reviews'], ['tasks', 'Tasks'], ['users', 'Users'], ['overview', 'Overview'], ['settings', 'Settings']]
     .map(([k, l]) => `<button class="${adminTab === k ? 'on' : ''}" onclick="adminTab='${k}';renderAdmin()">${l}</button>`).join('');
   el.innerHTML = loading();
   try {
@@ -646,6 +710,20 @@ async function renderAdmin() {
           <div style="display:flex;gap:8px;margin-top:10px"><button class="btn" style="flex:1" onclick="resolveWd(${w.id},true)">Mark paid</button><button class="btn alt" style="flex:1" onclick="resolveWd(${w.id},false)">Reject</button></div></div>`).join('')
         + `<p class="hint">Send the money by M-Pesa first, then tap Mark paid. Reject returns the money to the user's wallet.</p>`
         : '<p class="sub">No pending withdrawals.</p>';
+    } else if (adminTab === 'reviews') {
+      const rows = await rpc('admin_list_submissions', { p_status: 'pending' });
+      el.innerHTML = rows.length ? rows.map(r => `<div class="card">
+          <div class="row" style="border:0;padding-top:0"><b>${esc(r.title)}</b><b>${money(r.reward)}</b></div>
+          <small style="color:var(--mut)">${esc(r.username || 'user')} · ${(CATS[r.category] || ['', r.category])[1]} · ${new Date(r.created_at).toLocaleString('en-KE')}</small>
+          <div style="white-space:pre-wrap;margin:10px 0;background:var(--bg);border-radius:10px;padding:10px;font-size:14px">${esc(r.proof)}</div>
+          <div style="display:flex;gap:8px"><button class="btn" style="flex:1" onclick="reviewSub(${r.id},true)">Approve &amp; pay</button><button class="btn alt" style="flex:1" onclick="reviewSub(${r.id},false)">Reject</button></div></div>`).join('')
+        : '<p class="sub">No submissions waiting for review.</p>';
+    } else if (adminTab === 'tasks') {
+      adminTasks = await rpc('admin_list_tasks');
+      el.innerHTML = `<button class="btn big" onclick="taskForm(null)">+ Add task</button><div style="height:12px"></div>` + (adminTasks.length ? adminTasks.map(t => `<div class="card">
+          <div class="row" style="border:0;padding-top:0"><b>${esc(t.title)}</b><b>${money(t.reward)}</b></div>
+          <small style="color:var(--mut)">${(CATS[t.category] || ['', t.category])[1]} · ${t.slots ? t.slots + ' slots' : 'unlimited'} · ${t.pending} pending · ${t.approved} approved · ${t.active ? '✅ visible' : '🚫 hidden'}</small>
+          <div style="display:flex;gap:8px;margin-top:10px"><button class="btn alt" style="flex:1" onclick="taskForm(${t.id})">Edit</button><button class="btn alt" style="flex:1" onclick="toggleTask(${t.id})">${t.active ? 'Hide' : 'Show'}</button></div></div>`).join('') : '<p class="sub">No tasks yet.</p>');
     } else if (adminTab === 'users') {
       const rows = await rpc('admin_list_users');
       el.innerHTML = `<p class="sub">${rows.length} users</p>` + rows.map(u => `<div class="card">
@@ -669,6 +747,54 @@ async function renderAdmin() {
     }
   } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
+/* ---------- admin: tasks & reviews ---------- */
+let adminTasks = [];
+function taskForm(id) {
+  const t = id ? adminTasks.find(x => x.id === id) : { title: '', category: 'app_testing', description: '', link_url: '', audio_url: '', reward: '', slots: '', active: true };
+  if (!t) return;
+  $('#modal').innerHTML = `<div class="overlay" id="ov"><div class="sheet">
+    <h3>${id ? 'Edit task' : 'Add task'}</h3><div id="terr"></div>
+    <label class="field-label">Title</label><input id="tf_title" value="${esc(t.title)}">
+    <label class="field-label">Category</label><select id="tf_cat">${Object.entries(CATS).map(([k, v]) => `<option value="${k}" ${t.category === k ? 'selected' : ''}>${v[1]}</option>`).join('')}</select>
+    <label class="field-label">Instructions</label><textarea id="tf_desc">${esc(t.description)}</textarea>
+    <label class="field-label">Task link (optional, https://…)</label><input id="tf_link" value="${esc(t.link_url || '')}" placeholder="https://">
+    <label class="field-label">Audio link for transcription (optional, direct .mp3 link)</label><input id="tf_audio" value="${esc(t.audio_url || '')}" placeholder="https://…/clip.mp3">
+    <label class="field-label">Reward (Ksh)</label><input id="tf_reward" inputmode="numeric" value="${esc(t.reward)}">
+    <label class="field-label">Number of slots (blank = unlimited)</label><input id="tf_slots" inputmode="numeric" value="${esc(t.slots || '')}">
+    <label class="field-label" style="display:flex;gap:8px;align-items:center"><input id="tf_active" type="checkbox" style="width:auto" ${t.active ? 'checked' : ''}> Visible to users</label>
+    <button class="btn big" id="tsave" style="margin-top:10px">Save task</button>
+    <button class="link" style="width:100%" onclick="closeModal()">Cancel</button></div></div>`;
+  $('#ov').onclick = (e) => { if (e.target.id === 'ov') closeModal(); };
+  $('#tsave').onclick = async () => {
+    const show = (m) => $('#terr').innerHTML = `<div class="err">${esc(m)}</div>`;
+    const title = $('#tf_title').value.trim(), reward = Number($('#tf_reward').value), slotsRaw = $('#tf_slots').value.trim();
+    if (title.length < 3) return show('Enter a title (at least 3 characters).');
+    if (!(reward >= 0) || $('#tf_reward').value.trim() === '') return show('Enter the reward amount.');
+    if (slotsRaw !== '' && !(Number(slotsRaw) > 0)) return show('Slots must be a number above 0, or blank.');
+    $('#tsave').disabled = true;
+    try {
+      await rpc('admin_save_task', { p_id: id || null, p_title: title, p_category: $('#tf_cat').value, p_description: $('#tf_desc').value,
+        p_link: $('#tf_link').value.trim(), p_audio: $('#tf_audio').value.trim(), p_reward: reward,
+        p_slots: slotsRaw === '' ? null : Math.floor(Number(slotsRaw)), p_active: $('#tf_active').checked });
+      closeModal(); toast('Task saved'); renderAdmin();
+    } catch (e) { show(e.message); $('#tsave').disabled = false; }
+  };
+}
+async function toggleTask(id) {
+  const t = adminTasks.find(x => x.id === id); if (!t) return;
+  try {
+    await rpc('admin_save_task', { p_id: id, p_title: t.title, p_category: t.category, p_description: t.description, p_link: t.link_url || '', p_audio: t.audio_url || '',
+      p_reward: t.reward, p_slots: t.slots, p_active: !t.active });
+    toast(t.active ? 'Task hidden' : 'Task is now visible'); renderAdmin();
+  } catch (e) { toast(e.message); }
+}
+async function reviewSub(id, ok) {
+  let note = null;
+  if (!ok) { note = prompt('Reason for rejecting (optional, the user will see it):'); if (note === null) return; }
+  try { await rpc('admin_review_submission', { p_id: id, p_approve: ok, p_note: note || null }); toast(ok ? 'Approved and paid' : 'Rejected'); renderAdmin(); }
+  catch (e) { toast(e.message); }
+}
+
 async function resolveWd(id, paid) {
   let receipt = null;
   if (paid) { receipt = prompt('M-Pesa receipt code (optional):'); if (receipt === null) return; }
@@ -692,6 +818,7 @@ function route() {
   if (p[0] === 'spin') return spinView();
   if (p[0] === 'wallet') return walletView();
   if (p[0] === 'refer') return referView();
+  if (p[0] === 'market') return marketView();
   if (p[0] === 'settings') return settingsView();
   if (p[0] === 'admin') return adminView();
   homeView();
